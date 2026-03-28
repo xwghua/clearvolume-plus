@@ -1,5 +1,6 @@
 # ClearVolume-plus
 
+### ★ Passed test on both WINDOWS and MACOS!
 A Python/PyOpenGL 3D volume renderer for fluorescence microscopy TIFF stacks. Supports single-channel, multi-channel, RGB, and time-lapse volumes with real-time ray-casting in Maximum Intensity Projection (MIP) and Iso-Surface modes.
 
 Inspired by the [ClearVolume](https://github.com/ClearVolume/ClearVolume) Fiji plugin (Java/JOGL/OpenCL), reimplemented from scratch in Python using PyOpenGL, PyQt6, and GLSL shaders.
