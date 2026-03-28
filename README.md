@@ -327,3 +327,8 @@ clearvolume-plus/
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+## References
+[ClearVolume – Open-source live 3D visualization for light sheet microscopy.](http://www.nature.com/nmeth/journal/v12/n6/full/nmeth.3372.html) 
+
+Loic A. Royer, Martin Weigert, Ulrik Günther, Nicola Maghelli, Florian Jug, Ivo F. Sbalzarini, Eugene W. Myers , Nature Methods 12, 480–481 (2015) doi:10.1038/nmeth.3372
