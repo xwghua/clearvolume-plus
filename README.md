@@ -1,6 +1,7 @@
 # ClearVolume-plus
 
 ### ★ Passed test on both WINDOWS and MACOS!
+
 A Python/PyOpenGL 3D volume renderer for fluorescence microscopy TIFF stacks. Supports single-channel, multi-channel, RGB, and time-lapse volumes with real-time ray-casting in Maximum Intensity Projection (MIP) and Iso-Surface modes.
 
 Inspired by the [ClearVolume](https://github.com/ClearVolume/ClearVolume) Fiji plugin (Java/JOGL/OpenCL), reimplemented from scratch in Python using PyOpenGL, PyQt6, and GLSL shaders.
@@ -27,6 +28,30 @@ Inspired by the [ClearVolume](https://github.com/ClearVolume/ClearVolume) Fiji p
 - **Camera control** — mouse interaction plus precise Euler-angle / distance spinboxes
 - **Coordinate flip** — mirrors all axes (useful for microscopes with inverted Z)
 - **Export** — save the current view to PNG/JPEG; record time-lapses to video
+
+## V2.0 Change logs
+
+**(1) New Features**
+
+* Dynamic Axis Origin: The X/Y/Z axis origin is now placed dynamically at the front-bottom-left corner of the bounding box on every frame. 
+* Predefined Camera Presets: A quick-set dropdown in the Axis Panel (and a mirrored submenu under **View → Camera Preset**) provides one-click access to standard viewpoints.
+
+* Default View on File Load: When a volume is loaded, the view automatically snaps to **Off-axis Front**, providing an immediately readable perspective without requiring manual camera adjustment.
+* TIFF Export: The **File → Export Visualization** dialog now supports TIFF in addition to PNG and JPEG.
+
+* Drag-and-Drop File Loading: Volume files (`.tif`, `.tiff`, `.raw`) can be loaded by dragging them directly onto the application window.
+* Tick Marks Independent of Axis Line Visibility: Tick marks are now drawn even when the axis line itself is hidden. 
+
+**(2) Improvements**
+
+* Axis Label Placement — Outside the Bounding Box: Axis letter labels (X, Y, Z) and tick number labels are now always rendered outside the bounding box. 
+* Label-to-Axis Gap Scales with Font Size: Label and tick number gaps now scale proportionally with the rendered font size.
+* Axis Font Size Control Moved to Tick Marks Tab: The font size control is now a spinbox (range 6–32 pt) inside the **Tick Marks** group in the left Controls panel.
+* Coordinate Flip Merged into Axis Labels Group: The "Flip coordinates" checkbox has been moved into the **Axis Labels** group in the right Axis Panel.
+* Tick Marks Group Moved to Left Panel: The Tick Marks controls now live in the left Controls panel, balancing the left/right dock widths.
+* Brighter Default Render on Load: Range max is initialized to 0.5 (50 % of the normalized range) on every volume load.
+* Proportional Zoom: Scroll-wheel zoom is now proportional rather than additive, giving smooth, consistent zoom speed at any distance.
+* Smooth Font Rendering — No Glyph Corruption: All axis and tick labels are rendered using `QPainterPath.addText()` (filled vector outlines) instead of `QPainter.drawText()`.
 
 ---
 
