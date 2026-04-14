@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QDialog, QRadioButton, QDialogButtonBox, QButtonGroup, QVBoxLayout, QLabel,
 )
 from PyQt6.QtCore import Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QKeySequence, QImage, QDragEnterEvent, QDropEvent
+from PyQt6.QtGui import QAction, QKeySequence, QImage, QDragEnterEvent, QDropEvent, QIcon
 
 from .gl_viewport import GLViewport
 from .control_panel import ControlPanel
@@ -41,6 +41,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(self.TITLE)
         self.resize(1100, 720)
+
+        # Window icon — resolve relative to this file so it works from any cwd
+        _icon_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "CVplus.ico")
+        if os.path.isfile(_icon_path):
+            self.setWindowIcon(QIcon(_icon_path))
 
         # Central GL viewport
         self._viewport = GLViewport()
