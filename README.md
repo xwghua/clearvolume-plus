@@ -1,4 +1,4 @@
-# ClearVolume-plus
+# ClearVolume-plus V 2.0
 
 ### ★ Passed test on both WINDOWS and MACOS!
 
