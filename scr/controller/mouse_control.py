@@ -49,7 +49,7 @@ class MouseControl:
                 self.update()
     """
 
-    ZOOM_SPEED: float = 0.005
+    ZOOM_SPEED: float = 0.0008   # fractional change per degree of wheel rotation
     PAN_SPEED: float = 0.002
 
     def __init__(self, renderer: VolumeRenderer) -> None:
@@ -126,9 +126,12 @@ class MouseControl:
 
     def wheel(self, event: QWheelEvent) -> None:
         delta = event.angleDelta().y()
-        # Scroll up (positive delta) → zoom in (reduce camera distance)
-        new_dist = self._renderer._camera_distance - delta * self.ZOOM_SPEED
-        self._renderer._camera_distance = float(np.clip(new_dist, 0.3, 20.0))
+        # Proportional zoom: one scroll notch (delta=120) changes distance by
+        # ~9.6 %.  Proportional scaling keeps the apparent speed constant at
+        # all zoom levels (close-up stays fine, distant view still responsive).
+        factor = 1.0 - delta * self.ZOOM_SPEED
+        new_dist = self._renderer._camera_distance * factor
+        self._renderer._camera_distance = float(np.clip(new_dist, 0.05, 50.0))
 
     def double_click(self) -> None:
         """Signal to the parent widget to toggle full-screen."""

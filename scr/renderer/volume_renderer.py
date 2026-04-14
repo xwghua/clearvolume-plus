@@ -117,7 +117,7 @@ class VolumeRenderer:
         self.roi_min: np.ndarray = np.zeros(3, dtype=np.float32)
         self.roi_max: np.ndarray = np.ones(3, dtype=np.float32)
         # Coordinate flip (swap origin to opposite corner)
-        self.flip_coords: bool = False
+        self.flip_coords: bool = True
 
         # --- Camera -------------------------------------------------------
         self._rotation_quat: np.ndarray = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -170,7 +170,7 @@ class VolumeRenderer:
         # signal is clipped on first display.  The user can narrow the window
         # via the range sliders for contrast adjustment.
         for c in range(stack.n_channels):
-            self._ch_range_max[c] = 1.0
+            self._ch_range_max[c] = 0.5   # half of normalised max → brighter initial view
             self._ch_range_min[c] = 0.0
             self._ch_brightness[c] = 1.0
             self._ch_gamma[c] = 1.0

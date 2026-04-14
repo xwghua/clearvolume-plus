@@ -21,13 +21,15 @@ from PyQt6.QtWidgets import (
     QMainWindow, QFileDialog, QMessageBox, QApplication,
     QDialog, QRadioButton, QDialogButtonBox, QButtonGroup, QVBoxLayout, QLabel,
 )
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QKeySequence, QImage
+from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QKeySequence, QImage, QDragEnterEvent, QDropEvent
 
 from .gl_viewport import GLViewport
 from .control_panel import ControlPanel
 from .axis_panel import AxisPanel
 from ..volume.loader import load_stack, _KIND_LABELS
+from ..utils.math_utils import quaternion_from_euler_deg
+from .axis_panel import _CAMERA_PRESETS
 
 
 class MainWindow(QMainWindow):
@@ -45,7 +47,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._viewport)
 
         # Control panel (left dock)
-        self._ctrl = ControlPanel(self._viewport.renderer, self)
+        self._ctrl = ControlPanel(self._viewport, self)
         self._ctrl.parameter_changed.connect(self._viewport.update)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._ctrl)
 
@@ -70,6 +72,7 @@ class MainWindow(QMainWindow):
         self._ctrl.record_stop_requested.connect(self._on_record_stop)
 
         self._build_menu()
+        self.setAcceptDrops(True)
 
         if initial_file:
             self._load_file(initial_file)
@@ -123,6 +126,17 @@ class MainWindow(QMainWindow):
 
         view_menu.addSeparator()
 
+        # Camera preset submenu (mirrors the quick-set combo in AxisPanel)
+        cam_menu = view_menu.addMenu("Camera &Preset")
+        for name, angles in _CAMERA_PRESETS[1:]:   # skip placeholder row
+            act = QAction(name, self)
+            act.triggered.connect(
+                lambda _checked, a=angles: self._apply_camera_preset(*a)
+            )
+            cam_menu.addAction(act)
+
+        view_menu.addSeparator()
+
         fs_act = QAction("&Full Screen", self)
         fs_act.setShortcut(Qt.Key.Key_F11)
         fs_act.triggered.connect(self._toggle_fullscreen)
@@ -158,6 +172,12 @@ class MainWindow(QMainWindow):
         try:
             stack = load_stack(path, parent_widget=self, reinterpret_as=reinterpret_as)
             self._viewport.renderer.set_stack(stack)
+            # Apply the Off-axis Front default view on every fresh load
+            _off_axis = next(
+                (a for name, a in _CAMERA_PRESETS if name == "Off-axis Front"), None
+            )
+            if _off_axis is not None:
+                self._viewport.renderer.rotation = quaternion_from_euler_deg(*_off_axis)
             self._viewport.update()
             self._ctrl.update_for_stack(stack)
             self._ctrl.sync_from_renderer()
@@ -283,15 +303,73 @@ class MainWindow(QMainWindow):
             self,
             "Export Visualization",
             default_path,
-            "PNG image (*.png);;JPEG image (*.jpg *.jpeg)",
+            "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;TIFF image (*.tif *.tiff)",
         )
         if not path:
             return
 
-        if image.save(path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext in ('.tif', '.tiff'):
+            self._save_tiff(image, path)
+        elif image.save(path):
             self.statusBar().showMessage(f"Exported: {path}")
         else:
             QMessageBox.critical(self, "Export error", f"Failed to save image to:\n{path}")
+
+    # ------------------------------------------------------------------
+    # Drag and drop
+    # ------------------------------------------------------------------
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """Accept drag if it carries exactly one supported file."""
+        mime = event.mimeData()
+        if mime.hasUrls():
+            paths = [u.toLocalFile() for u in mime.urls()]
+            if len(paths) == 1 and _is_supported(paths[0]):
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """Load the dropped file."""
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        if paths and _is_supported(paths[0]):
+            event.acceptProposedAction()
+            self._load_file(paths[0])
+        else:
+            event.ignore()
+
+    def _apply_camera_preset(self, rx: float, ry: float, rz: float) -> None:
+        r = self._viewport.renderer
+        r.rotation = quaternion_from_euler_deg(rx, ry, rz)
+        self._viewport.update()
+        self._viewport.transform_changed.emit()
+
+    def _save_tiff(self, image: "QImage", path: str) -> None:
+        """Save a QImage as a TIFF using tifffile (preferred) or Qt."""
+        try:
+            import tifffile
+            from PyQt6.QtGui import QImage as _QImage
+            img_rgb = image.convertToFormat(_QImage.Format.Format_RGB888)
+            ptr = img_rgb.constBits()
+            ptr.setsize(img_rgb.sizeInBytes())
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape(
+                img_rgb.height(), img_rgb.width(), 3
+            ).copy()
+            tifffile.imwrite(path, arr)
+            self.statusBar().showMessage(f"Exported: {path}")
+        except ImportError:
+            # tifffile not installed — fall back to Qt's built-in TIFF plugin
+            if image.save(path):
+                self.statusBar().showMessage(f"Exported: {path}")
+            else:
+                QMessageBox.critical(
+                    self, "Export error",
+                    "TIFF export requires the tifffile package.\n"
+                    "Install with:  pip install tifffile",
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", f"Failed to save TIFF:\n{exc}")
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():
@@ -451,3 +529,8 @@ class MainWindow(QMainWindow):
 
 def _toggle_dock(dock) -> None:
     dock.setVisible(not dock.isVisible())
+
+
+def _is_supported(path: str) -> bool:
+    """Return True if *path* has a file extension the loader can handle."""
+    return os.path.splitext(path)[1].lower() in ('.tif', '.tiff', '.raw')

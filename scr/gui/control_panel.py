@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QSlider, QComboBox, QGroupBox, QDoubleSpinBox,
+    QLabel, QSlider, QSpinBox, QComboBox, QGroupBox, QDoubleSpinBox,
     QCheckBox, QPushButton, QColorDialog, QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -46,9 +46,10 @@ class ControlPanel(QDockWidget):
     record_video_requested = pyqtSignal()
     record_stop_requested = pyqtSignal()
 
-    def __init__(self, renderer: VolumeRenderer, parent=None) -> None:
+    def __init__(self, viewport, parent=None) -> None:
         super().__init__("Controls", parent)
-        self._renderer = renderer
+        self._viewport = viewport
+        self._renderer: VolumeRenderer = viewport.renderer
         self._tf_presets = TransferFunction1D.all_presets()
         self._building = False
 
@@ -79,6 +80,7 @@ class ControlPanel(QDockWidget):
         self._main_layout.addWidget(self._make_render_group())
         self._intensity_group = self._make_intensity_group()
         self._main_layout.addWidget(self._intensity_group)
+        self._main_layout.addWidget(self._make_ticks_group())
         self._main_layout.addWidget(self._make_quality_group())
         self._main_layout.addStretch()
 
@@ -218,6 +220,46 @@ class ControlPanel(QDockWidget):
         self._spin_iso.valueChanged.connect(self._on_iso_value)
         row.addWidget(self._spin_iso)
         vl.addLayout(row)
+
+        return box
+
+    def _make_ticks_group(self) -> QGroupBox:
+        box = QGroupBox("Tick Marks")
+        vl = QVBoxLayout(box)
+        vl.setSpacing(4)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Count"))
+        self._spin_ticks = QSpinBox()
+        self._spin_ticks.setRange(0, 20)
+        self._spin_ticks.setValue(self._viewport.axis_ticks)
+        self._spin_ticks.valueChanged.connect(self._on_tick_count)
+        row.addWidget(self._spin_ticks)
+        vl.addLayout(row)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Unit spacing"))
+        self._spin_tick_unit = QDoubleSpinBox()
+        self._spin_tick_unit.setRange(0.001, 1e6)
+        self._spin_tick_unit.setDecimals(3)
+        self._spin_tick_unit.setValue(self._viewport.axis_tick_unit)
+        self._spin_tick_unit.valueChanged.connect(self._on_tick_unit)
+        row2.addWidget(self._spin_tick_unit)
+        vl.addLayout(row2)
+
+        self._chk_tick_labels = QCheckBox("Show tick numbers")
+        self._chk_tick_labels.setChecked(self._viewport.axis_tick_show_labels)
+        self._chk_tick_labels.toggled.connect(self._on_tick_labels)
+        vl.addWidget(self._chk_tick_labels)
+
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Font size (pt)"))
+        self._spin_font_size = QSpinBox()
+        self._spin_font_size.setRange(6, 32)
+        self._spin_font_size.setValue(self._viewport.axis_font_size)
+        self._spin_font_size.valueChanged.connect(self._on_axis_font_size)
+        row3.addWidget(self._spin_font_size)
+        vl.addLayout(row3)
 
         return box
 
@@ -361,6 +403,26 @@ class ControlPanel(QDockWidget):
         if new_max > self._renderer.range_min:
             self._renderer.range_max = new_max
             self.parameter_changed.emit()
+
+    # ------------------------------------------------------------------
+    # Slot callbacks — tick marks
+    # ------------------------------------------------------------------
+
+    def _on_tick_count(self, value: int) -> None:
+        self._viewport.axis_ticks = value
+        self.parameter_changed.emit()
+
+    def _on_tick_unit(self, value: float) -> None:
+        self._viewport.axis_tick_unit = value
+        self.parameter_changed.emit()
+
+    def _on_tick_labels(self, checked: bool) -> None:
+        self._viewport.axis_tick_show_labels = checked
+        self.parameter_changed.emit()
+
+    def _on_axis_font_size(self, value: int) -> None:
+        self._viewport.axis_font_size = value
+        self.parameter_changed.emit()
 
     # ------------------------------------------------------------------
     # Slot callbacks — quality

@@ -13,7 +13,10 @@ import math
 import numpy as np
 
 from PyQt6.QtOpenGLWidgets import QOpenGLWidget
-from PyQt6.QtGui import QMouseEvent, QWheelEvent, QKeyEvent, QPainter, QPen, QColor, QFont
+from PyQt6.QtGui import (
+    QMouseEvent, QWheelEvent, QKeyEvent,
+    QPainter, QPen, QColor, QFont, QBrush, QPainterPath,
+)
 from PyQt6.QtCore import Qt, QPointF, QRectF, pyqtSignal
 
 from OpenGL.GL import glFinish
@@ -58,6 +61,7 @@ class GLViewport(QOpenGLWidget):
         self.axis_ticks: int = 5
         self.axis_tick_unit: float = 1.0   # physical unit per tick
         self.axis_tick_show_labels: bool = True  # show numeric labels on ticks
+        self.axis_font_size: int = 9        # axis label / tick font size in pt
 
     # ------------------------------------------------------------------
     # Public API (delegated to renderer)
@@ -177,8 +181,16 @@ class GLViewport(QOpenGLWidget):
     # ------------------------------------------------------------------
 
     def _paint_axes(self) -> None:
-        """Draw X/Y/Z axis lines + tick marks + labels using QPainter."""
-        if not any(self.axis_visible.values()):
+        """Draw X/Y/Z axis lines + tick marks + labels using QPainter.
+
+        The axis origin is dynamically placed at the bounding-box corner that is
+        front-bottom-left from the current camera angle, so X always extends
+        rightward, Y upward, and Z deepens into the volume regardless of rotation.
+        Tick marks are drawn even when the axis line itself is hidden.
+        """
+        any_visible = any(self.axis_visible.values())
+        has_ticks   = self.axis_ticks > 0
+        if not any_visible and not has_ticks:
             return
 
         w = self.width()
@@ -187,93 +199,147 @@ class GLViewport(QOpenGLWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        # Project axis endpoints from 3D model space to 2D screen
-        proj = perspective_matrix(self._renderer._fov_deg, w / max(h, 1), 0.01, 100.0)
-        view = self._renderer._build_view_matrix()
+        proj  = perspective_matrix(self._renderer._fov_deg, w / max(h, 1), 0.01, 100.0)
+        view  = self._renderer._build_view_matrix()
         model = self._renderer._build_model_matrix()
-        mvp = proj @ view @ model
+        vm    = view @ model          # world → camera space (no projection)
+        mvp   = proj @ vm
 
-        # Axis extents in model space (half the volume aspect)
+        # Axis extents in model space
         if self._renderer._volume is not None:
             asp = self._renderer._volume.aspect_ratio
         else:
             asp = np.array([1.0, 1.0, 1.0], dtype=np.float32)
-        half_x, half_y, half_z = asp * 0.5
+        half_x, half_y, half_z = float(asp[0]) * 0.5, float(asp[1]) * 0.5, float(asp[2]) * 0.5
 
-        # Convert ROI texture-space bounds [0,1] to model space [-half, +half].
-        # texCoord=0 → model=-half, texCoord=1 → model=+half.
-        roi_min = self._renderer.roi_min  # shape (3,), values in [0,1]
+        # ROI bounds in model space
+        roi_min = self._renderer.roi_min
         roi_max = self._renderer.roi_max
-        roi_start = np.array([
-            (2.0 * roi_min[0] - 1.0) * half_x,
-            (2.0 * roi_min[1] - 1.0) * half_y,
-            (2.0 * roi_min[2] - 1.0) * half_z,
-        ], dtype=np.float32)
-        roi_end = np.array([
-            (2.0 * roi_max[0] - 1.0) * half_x,
-            (2.0 * roi_max[1] - 1.0) * half_y,
-            (2.0 * roi_max[2] - 1.0) * half_z,
-        ], dtype=np.float32)
+        x0 = float((2.0 * roi_min[0] - 1.0) * half_x)
+        y0 = float((2.0 * roi_min[1] - 1.0) * half_y)
+        z0 = float((2.0 * roi_min[2] - 1.0) * half_z)
+        x1 = float((2.0 * roi_max[0] - 1.0) * half_x)
+        y1 = float((2.0 * roi_max[1] - 1.0) * half_y)
+        z1 = float((2.0 * roi_max[2] - 1.0) * half_z)
 
-        # Origin: ROI min corner.  Three axis lines run along the box edges
-        # that meet at this corner, spanning only the active ROI region.
-        origin = roi_start
+        # Build all 8 bounding-box corners.
+        # Bit encoding: bit2=x (0→x0,1→x1), bit1=y, bit0=z.
+        # This means XOR-ing with 4 flips x, 2 flips y, 1 flips z.
+        xs, ys, zs = (x0, x1), (y0, y1), (z0, z1)
+        corners = np.array([
+            [xs[(i >> 2) & 1], ys[(i >> 1) & 1], zs[i & 1], 1.0]
+            for i in range(8)
+        ], dtype=np.float32)  # (8, 4)
 
-        axes = {
-            "X": (origin, np.array([roi_end[0],  origin[1],   origin[2]  ])),
-            "Y": (origin, np.array([origin[0],   roi_end[1],  origin[2]  ])),
-            "Z": (origin, np.array([origin[0],   origin[1],   roi_end[2] ])),
+        # Transform to camera space and pick front-bottom-left corner.
+        # In camera space: +X=right, +Y=up, camera looks in +Z (objects at -Z).
+        # Front = max cz (least negative), left = min cx, bottom = min cy.
+        cam = (vm @ corners.T).T     # (8, 4)
+        cw  = cam[:, 3]
+        cx  = cam[:, 0] / cw
+        cy  = cam[:, 1] / cw
+        cz  = cam[:, 2] / cw
+        best = int(np.argmax(cz - cx - cy))
+
+        origin = corners[best,     :3]
+        p1_x   = corners[best ^ 4, :3]   # adjacent corner along model X
+        p1_y   = corners[best ^ 2, :3]   # adjacent corner along model Y
+        p1_z   = corners[best ^ 1, :3]   # adjacent corner along model Z
+
+        axes_data = {
+            "X": (origin, p1_x),
+            "Y": (origin, p1_y),
+            "Z": (origin, p1_z),
         }
 
-        font = QFont("Arial", 9, QFont.Weight.Bold)
+        # Build font — regular (not bold) weight; construct QFontMetrics directly
+        # so metrics are reliable regardless of the painting context.
+        from PyQt6.QtGui import QFontMetrics, QFontMetricsF
+        font = QFont("Arial", self.axis_font_size)
+        font.setWeight(QFont.Weight.Normal)
         painter.setFont(font)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        fm = QFontMetricsF(font)
+        # Vertical baseline adjustment: centres the cap-height on the anchor point.
+        baseline_up = (fm.ascent() - fm.descent()) * 0.5
+        # Gap distances that scale with font size.
+        # axis_gap: space between axis tip and the axis letter label.
+        # tick_gap: space between tick mark end and tick number label.
+        axis_gap  = fm.ascent() * 1.2   # ~1 full cap-height clearance
+        tick_gap  = fm.ascent() * 0.8   # slightly smaller for tick numbers
 
-        for axis_name, (p0, p1) in axes.items():
-            if not self.axis_visible.get(axis_name, True):
+        # Screen-space centre of the bounding box — used to determine which
+        # perpendicular direction is "outward" for tick labels.
+        box_center_model = np.mean(corners[:, :3], axis=0)
+        center_s = self._project(box_center_model, mvp, w, h)
+
+        for axis_name, (p0, p1) in axes_data.items():
+            axis_vis = self.axis_visible.get(axis_name, True)
+            if not axis_vis and not has_ticks:
                 continue
 
             color = self.axis_colors[axis_name]
-            pen = QPen(color, 1)
-            painter.setPen(pen)
+            pen   = QPen(color, 1)
 
             s0 = self._project(p0, mvp, w, h)
             s1 = self._project(p1, mvp, w, h)
             if s0 is None or s1 is None:
                 continue
 
-            painter.drawLine(int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]))
+            # Axis screen direction (unit vector) and its left perpendicular
+            ax_vec  = s1 - s0
+            ax_len  = float(np.linalg.norm(ax_vec))
+            if ax_len < 1e-4:
+                continue
+            ax_unit   = ax_vec / ax_len
+            perp_unit = np.array([-ax_unit[1], ax_unit[0]], dtype=np.float32)
 
-            # --- Tick marks ---
-            n_ticks = max(1, self.axis_ticks)
-            for i in range(1, n_ticks + 1):
-                t_frac = i / n_ticks
-                pt = p0 + (p1 - p0) * t_frac
-                sp = self._project(pt, mvp, w, h)
-                if sp is None:
-                    continue
-                # Small perpendicular tick (5 px in screen space)
-                ax = s1 - s0
-                ax_len = np.linalg.norm(ax)
-                if ax_len < 1e-4:
-                    continue
-                perp = np.array([-ax[1], ax[0]]) / ax_len * 5
-                tx0 = sp + perp
-                tx1 = sp - perp
-                painter.drawLine(int(tx0[0]), int(tx0[1]),
-                                 int(tx1[0]), int(tx1[1]))
-                # Tick label
-                if self.axis_tick_show_labels:
-                    label_val = i * self.axis_tick_unit
-                    tick_label = f"{label_val:.4g}"
-                    painter.setPen(QPen(color.lighter(160), 1))
-                    painter.drawText(QRectF(sp[0]+4, sp[1]-10, 50, 16), tick_label)
+            # Choose the perpendicular direction that points AWAY from the box
+            # centre so that tick labels always appear outside the bounding box.
+            if center_s is not None:
+                mid_s     = (s0 + s1) * 0.5
+                to_center = center_s - mid_s
+                if float(np.dot(perp_unit, to_center)) > 0:
+                    perp_unit = -perp_unit
+
+            # --- Axis line (only when visible) ---
+            if axis_vis:
+                painter.setPen(pen)
+                painter.drawLine(int(s0[0]), int(s0[1]), int(s1[0]), int(s1[1]))
+
+            # --- Axis label: placed BEYOND s1, outside the bounding box ---
+            if axis_vis:
+                label = self.axis_labels.get(axis_name, axis_name)
+                lpos  = s1 + ax_unit * axis_gap
+                _draw_text_path(painter, font, QBrush(color),
+                                lpos[0], lpos[1] + baseline_up, label)
+
+            # --- Tick marks (drawn even when axis line is hidden) ---
+            if has_ticks:
+                tick_half = 4                         # half tick length in screen px
+                label_gap = tick_gap
+                n_ticks   = max(1, self.axis_ticks)
+                for i in range(1, n_ticks + 1):
+                    pt = p0 + (p1 - p0) * (i / n_ticks)
+                    sp = self._project(pt, mvp, w, h)
+                    if sp is None:
+                        continue
+
+                    # Tick line (crosses axis, half inside / half outside)
+                    tk0 = sp + perp_unit * tick_half
+                    tk1 = sp - perp_unit * tick_half
                     painter.setPen(pen)
+                    painter.drawLine(
+                        int(tk0[0]), int(tk0[1]),
+                        int(tk1[0]), int(tk1[1]),
+                    )
 
-            # --- Axis label at far end ---
-            painter.setPen(QPen(color, 1))
-            label = self.axis_labels.get(axis_name, axis_name)
-            if s1 is not None:
-                painter.drawText(QRectF(s1[0] + 6, s1[1] - 8, 60, 16), label)
+                    # Tick label — offset in outward perpendicular direction
+                    if self.axis_tick_show_labels:
+                        tick_str = f"{i * self.axis_tick_unit:.4g}"
+                        lpos     = sp + perp_unit * (tick_half + label_gap)
+                        _draw_text_path(painter, font, QBrush(color.lighter(160)),
+                                        lpos[0], lpos[1] + baseline_up, tick_str)
 
         painter.end()
 
@@ -290,3 +356,29 @@ class GLViewport(QOpenGLWidget):
         sx = (ndc[0] + 1.0) * 0.5 * w
         sy = (1.0 - ndc[1]) * 0.5 * h  # flip Y
         return np.array([sx, sy], dtype=np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Text rendering helper
+# ---------------------------------------------------------------------------
+
+def _draw_text_path(
+    painter: QPainter,
+    font: QFont,
+    brush: QBrush,
+    x: float,
+    y: float,
+    text: str,
+) -> None:
+    """Draw *text* as a filled vector path at baseline (x, y).
+
+    Using QPainterPath.addText() converts glyphs to filled outlines before
+    any OpenGL interaction, completely bypassing Qt's GL glyph-texture cache.
+    This eliminates the corrupted / 'tilted-lines' rendering that occurs when
+    QPainter.drawText() is called inside QOpenGLWidget.paintGL().
+    """
+    path = QPainterPath()
+    path.addText(QPointF(x, y), font, text)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(brush)
+    painter.drawPath(path)

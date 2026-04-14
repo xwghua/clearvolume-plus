@@ -20,7 +20,7 @@ import numpy as np
 from PyQt6.QtWidgets import (
     QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QCheckBox, QLineEdit, QSpinBox, QDoubleSpinBox,
-    QPushButton, QGroupBox, QColorDialog,
+    QPushButton, QGroupBox, QColorDialog, QComboBox,
 )
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -30,6 +30,26 @@ from .range_slider import RangeSlider
 from ..utils.math_utils import (
     quaternion_to_euler_deg, quaternion_from_euler_deg, quaternion_identity,
 )
+
+
+# Camera presets: (label, (rx_deg, ry_deg, rz_deg))
+# Calibrated against user's reference orientations (flip_coords=True default):
+#   Front view  → Rx=-90,  Ry=0,   Rz=180
+#   Top view    → Rx=-180, Ry=0,   Rz=180
+# Rx steps of ±90° rotate through Front→Top→Back→Bottom.
+# Ry steps of ±90° rotate through Front→Right→Back (or Left) in plane.
+_CAMERA_PRESETS: list[tuple[str, tuple[float, float, float] | None]] = [
+    ("— quick set —",   None),
+    ("Front",           ( -90.0,    0.0,  180.0)),
+    ("Back",            (  90.0,    0.0,  180.0)),
+    ("Right",           ( -90.0,   90.0,  180.0)),
+    ("Left",            ( -90.0,  -90.0,  180.0)),
+    ("Top",             (-180.0,    0.0,  180.0)),
+    ("Bottom",          (   0.0,    0.0,  180.0)),
+    ("Isometric Right", (-125.0,   45.0,  180.0)),
+    ("Isometric Left",  (-125.0,  -45.0,  180.0)),
+    ("Off-axis Front",  (-110.0,   15.0,  180.0)),
+]
 
 
 class AxisPanel(QDockWidget):
@@ -59,10 +79,8 @@ class AxisPanel(QDockWidget):
         layout.setSpacing(6)
 
         layout.addWidget(self._make_axes_group())
-        layout.addWidget(self._make_ticks_group())
         layout.addWidget(self._make_roi_group())
         layout.addWidget(self._make_overlay_group())
-        layout.addWidget(self._make_transform_group())
         layout.addWidget(self._make_camera_group())
         layout.addStretch()
 
@@ -107,36 +125,11 @@ class AxisPanel(QDockWidget):
             self._color_buttons[axis] = btn
             grid.addWidget(btn, row_idx, 3)
 
-        return box
-
-    def _make_ticks_group(self) -> QGroupBox:
-        box = QGroupBox("Tick Marks")
-        vl = QVBoxLayout(box)
-        vl.setSpacing(4)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Count"))
-        self._spin_ticks = QSpinBox()
-        self._spin_ticks.setRange(0, 20)
-        self._spin_ticks.setValue(self._vp.axis_ticks)
-        self._spin_ticks.valueChanged.connect(self._on_tick_count)
-        row.addWidget(self._spin_ticks)
-        vl.addLayout(row)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("Unit spacing"))
-        self._spin_unit = QDoubleSpinBox()
-        self._spin_unit.setRange(0.001, 1e6)
-        self._spin_unit.setDecimals(3)
-        self._spin_unit.setValue(self._vp.axis_tick_unit)
-        self._spin_unit.valueChanged.connect(self._on_unit)
-        row2.addWidget(self._spin_unit)
-        vl.addLayout(row2)
-
-        self._chk_tick_labels = QCheckBox("Show tick numbers")
-        self._chk_tick_labels.setChecked(self._vp.axis_tick_show_labels)
-        self._chk_tick_labels.toggled.connect(self._on_tick_labels)
-        vl.addWidget(self._chk_tick_labels)
+        # Flip-coordinates checkbox merged into this group
+        self._chk_flip = QCheckBox("Flip coordinates (mirror all axes)")
+        self._chk_flip.setChecked(self._vp.renderer.flip_coords)
+        self._chk_flip.toggled.connect(self._on_flip_coords)
+        grid.addWidget(self._chk_flip, 4, 0, 1, 4)
 
         return box
 
@@ -179,17 +172,6 @@ class AxisPanel(QDockWidget):
 
         return box
 
-    def _make_transform_group(self) -> QGroupBox:
-        box = QGroupBox("Transform")
-        vl = QVBoxLayout(box)
-        vl.setSpacing(4)
-
-        self._chk_flip = QCheckBox("Flip coordinates (mirror all axes)")
-        self._chk_flip.setChecked(self._vp.renderer.flip_coords)
-        self._chk_flip.toggled.connect(self._on_flip_coords)
-        vl.addWidget(self._chk_flip)
-        return box
-
     def _make_camera_group(self) -> QGroupBox:
         """Camera & Transform — Euler angles, translation, distance with precise control."""
         box = QGroupBox("Camera & Transform")
@@ -223,6 +205,14 @@ class AxisPanel(QDockWidget):
         btn_reset.clicked.connect(self._on_reset_camera)
         grid.addWidget(btn_reset, 6, 0, 1, 2)
 
+        # Camera preset quick-set combo
+        grid.addWidget(QLabel("Quick set:"), 7, 0)
+        self._preset_combo = QComboBox()
+        for label, _ in _CAMERA_PRESETS:
+            self._preset_combo.addItem(label)
+        self._preset_combo.activated.connect(self._on_camera_preset)
+        grid.addWidget(self._preset_combo, 7, 1)
+
         return box
 
     # ------------------------------------------------------------------
@@ -247,21 +237,6 @@ class AxisPanel(QDockWidget):
             self._set_button_color(self._color_buttons[axis], color)
             self._vp.update()
             self.changed.emit()
-
-    def _on_tick_count(self, value: int) -> None:
-        self._vp.axis_ticks = value
-        self._vp.update()
-        self.changed.emit()
-
-    def _on_unit(self, value: float) -> None:
-        self._vp.axis_tick_unit = value
-        self._vp.update()
-        self.changed.emit()
-
-    def _on_tick_labels(self, checked: bool) -> None:
-        self._vp.axis_tick_show_labels = checked
-        self._vp.update()
-        self.changed.emit()
 
     # ------------------------------------------------------------------
     # Callbacks — ROI (dual-handle range sliders)
@@ -365,6 +340,19 @@ class AxisPanel(QDockWidget):
             return
         self._vp.renderer._camera_distance = value
         self._vp.update()
+
+    def _on_camera_preset(self, index: int) -> None:
+        if index <= 0:
+            return
+        angles = _CAMERA_PRESETS[index][1]
+        if angles is None:
+            return
+        rx, ry, rz = angles
+        r = self._vp.renderer
+        r.rotation = quaternion_from_euler_deg(rx, ry, rz)
+        self._vp.update()
+        self._vp.transform_changed.emit()
+        # Leave the combo showing the selected preset name (don't reset)
 
     def _on_reset_camera(self) -> None:
         r = self._vp.renderer
